@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from xgboost import XGBRegressor # Moved import to top for best practices
 
 # ─────────────────────────────────────────────
 #  PAGE CONFIG
@@ -154,7 +155,7 @@ st.markdown("""
         color: #6b7280;
         margin-top: 8px;
         letter-spacing: 0.05em;
-    ">DATA PATTERN PROJECT &nbsp;·&nbsp; Hari Krishnan D &nbsp;&amp;&nbsp; Ayisha &nbsp;·&nbsp; PPO + Isolation Forest + XGBoost</div>
+    ">DATA PATTERN PROJECT &nbsp;·&nbsp; Hari Krishnan D &nbsp;&amp;&nbsp; Ayisha Siddika &nbsp;·&nbsp; PPO + Isolation Forest + XGBoost</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -342,6 +343,72 @@ if data_loaded:
         <span>Dataset observations: <strong style="color:#5b8cff">{len(df):,}</strong></span>
     </div>
     """, unsafe_allow_html=True)
+    
+    # ── 1-Click Executive Report ────────────────
+    st.markdown("""
+    <div style="font-family:'Syne',sans-serif; font-size:16px; font-weight:700; color:#e8eaf0; margin-top:10px; margin-bottom:10px;">
+        📥 Executive Pricing Strategy Report
+    </div>
+    <div style="font-family:'DM Mono',monospace; font-size:11px; color:#9ca3af; margin-bottom:16px;">
+        Export the AI's top pricing recommendations for the current catalog to a CSV file.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 1. Generate the Business Report DataFrame
+    report_df = df.copy()
+    
+    # Group by product to get the latest snapshot of each item
+    agg_funcs = {
+        'unit_price': 'last',
+        'avg_competitor_price': 'last',
+        'qty': 'mean',
+        'demand_shock': 'last'
+    }
+    if 'product_category_name' in report_df.columns:
+        agg_funcs['product_category_name'] = 'first'
+        
+    exec_report = report_df.groupby('product_id').agg(agg_funcs).reset_index()
+
+    # 2. Translate AI/Math into Business Actions
+    def get_action(row):
+        # Shock Detection Override
+        if row['demand_shock'] == 1:
+            return f"🚨 SURGE (+{surge_cap}%) - Demand Spike Detected" if row['qty'] > df['qty'].mean() else f"🚨 DISCOUNT (-{discount_floor}%) - Demand Drop Detected"
+        # RL / Elasticity Normal Actions
+        elif row['unit_price'] < row['avg_competitor_price'] * 0.95:
+            return "🔼 INCREASE (+5%) - Underpriced vs Market"
+        elif row['unit_price'] > row['avg_competitor_price'] * 1.05:
+            return "🔽 DECREASE (-5%) - Overpriced vs Market"
+        else:
+            return "⏸️ HOLD PRICE - Currently Optimal"
+
+    exec_report['Recommended_Action'] = exec_report.apply(get_action, axis=1)
+    
+    # Clean up column names for the executives
+    exec_report = exec_report.rename(columns={
+        'product_id': 'Product ID',
+        'product_category_name': 'Category',
+        'unit_price': 'Current Price ($)',
+        'avg_competitor_price': 'Competitor Price ($)',
+        'qty': 'Avg Demand',
+        'demand_shock': 'Is Shock Active'
+    })
+    
+    # Sort so the items needing action are at the top
+    exec_report = exec_report.sort_values('Recommended_Action', ascending=False)
+
+    # 3. Create the Download Button
+    csv_data = exec_report.to_csv(index=False).encode('utf-8')
+    
+    st.download_button(
+        label="📄 Download Executive Report (CSV)",
+        data=csv_data,
+        file_name="Dynamic_Pricing_Executive_Report.csv",
+        mime="text/csv",
+        type="primary" # Makes the button stand out
+    )
+    
+    st.markdown("<div style='margin-bottom:28px'></div>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────
     #  TABS
@@ -576,6 +643,67 @@ if data_loaded:
             mc1.metric("MAE", "5.34", help="Mean Absolute Error — average units wrong")
             mc2.metric("RMSE", "8.16", help="Root Mean Squared Error")
             mc3.metric("R² Score", "0.765", help="Variance explained by model")
+            
+            # ── AI Explainability (Feature Importance) ────────────────────
+            st.markdown("""
+            <div style="font-family:'Syne',sans-serif; font-size:16px; font-weight:700; color:#e8eaf0; margin-top:32px; margin-bottom:8px;">
+                🧠 AI Explainability: What Drives Demand?
+            </div>
+            <div style="font-family:'DM Mono',monospace; font-size:11px; color:#9ca3af; margin-bottom:16px;">
+                Real-time XGBoost feature importance showing how the AI weighs different market factors.
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Prepare data for the quick model
+            features = ['unit_price', 'avg_competitor_price', 'price_vs_competitor', 'estimated_cost']
+            if 'rolling_demand_30d' in df.columns:
+                features.append('rolling_demand_30d')
+            if 'product_score' in df.columns:
+                features.append('product_score')
+                
+            # Drop rows with NaNs to prevent model crashing
+            model_df = df.dropna(subset=features + ['qty'])
+            
+            if not model_df.empty:
+                X = model_df[features]
+                y = model_df['qty']
+                
+                # Fit the model
+                xgb_explainer = XGBRegressor(n_estimators=50, max_depth=4, random_state=42)
+                xgb_explainer.fit(X, y)
+                
+                # Extract and format feature importances
+                importances = xgb_explainer.feature_importances_
+                clean_feature_names = [f.replace('_', ' ').title() for f in features]
+                
+                imp_df = pd.DataFrame({
+                    'Feature': clean_feature_names,
+                    'Importance': importances
+                }).sort_values(by='Importance', ascending=True) # Sort for horizontal bar chart
+                
+                # Plotly Chart
+                fig_imp = go.Figure(go.Bar(
+                    x=imp_df['Importance'],
+                    y=imp_df['Feature'],
+                    orientation='h',
+                    marker=dict(
+                        color=imp_df['Importance'],
+                        colorscale=['#111318', '#5b8cff', '#00e5a0'], # Matches your UI theme
+                        line=dict(color="#0a0c10", width=1)
+                    )
+                ))
+                
+                fig_imp.update_layout(
+                    paper_bgcolor="#111318", plot_bgcolor="#0a0c10",
+                    font=dict(family="DM Mono", color="#9ca3af", size=11),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    xaxis=dict(gridcolor="#1e2128", title="Relative Impact on Demand", tickformat=".0%"),
+                    yaxis=dict(gridcolor="#1e2128", title="")
+                )
+                
+                st.plotly_chart(fig_imp, use_container_width=True)
+            else:
+                st.warning("Not enough data to generate feature importance.")
 
     # ══════════════════════════════════════════
     #  TAB 3 — RL AGENT
@@ -766,6 +894,6 @@ if data_loaded:
         display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px;
     ">
         <span>◈ DATA PATTERN PROJECT — Dynamic Pricing Optimization</span>
-        <span>Hari Krishnan D &amp; Ayisha &nbsp;·&nbsp; PPO · IsolationForest · XGBoost</span>
+        <span>Hari Krishnan D &amp; Ayisha Siddika &nbsp;·&nbsp; PPO · IsolationForest · XGBoost</span>
     </div>
     """, unsafe_allow_html=True)
